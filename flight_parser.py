@@ -26,8 +26,8 @@
 
 #then save using "CTRL + O, press Enter, CTRL + X"
 # now run the code using "python flight_parser.py -i data/db.csv"
-
-
+# run "python3 flight_parser.py -i data/db.csv -o flights_output.json"
+#run "python3 flight_parser.py -d data
 
 
 import argparse
