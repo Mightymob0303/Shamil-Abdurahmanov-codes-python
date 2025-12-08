@@ -53,31 +53,46 @@ DISALLOWED_AIRPORT_CODES = {"XXX"}
 def parse_args():
     """Set up and parse command-line arguments using argparse."""
     parser = argparse.ArgumentParser(
-        description="Flight schedule parser (Grade 8 version)."
+        description="Flight schedule parser"
     )
 
     source_group = parser.add_mutually_exclusive_group(required=True)
     source_group.add_argument(
-        "-i",
-        "--input",
-        metavar="CSV_FILE",
+        "-i", "--input", metavar="CSV_FILE",
         help="Parse a single CSV file.",
     )
     source_group.add_argument(
-        "-d",
-        "--directory",
-        metavar="CSV_DIR",
+        "-d", "--directory", metavar="CSV_DIR",
         help="Parse all .csv files in a folder (non-recursive).",
     )
 
     parser.add_argument(
-        "-o",
-        "--output",
-        metavar="OUTPUT_JSON",
+        "-o", "--output", metavar="OUTPUT_JSON",
         help="Optional custom output path for valid flights JSON (default: db.json).",
     )
 
     return parser.parse_args()
+
+
+def ensure_file_exists(path):
+    """Check that a CSV file exists and is readable."""
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"ERROR: File not found: {path}")
+    if not path.lower().endswith(".csv"):
+        raise ValueError(f"ERROR: Not a CSV file: {path}")
+
+
+def ensure_directory_exists(path):
+    """Check that directory exists and contains at least one .csv file."""
+    if not os.path.isdir(path):
+        raise NotADirectoryError(f"ERROR: Directory not found: {path}")
+
+    csv_files = [
+        f for f in os.listdir(path)
+        if f.lower().endswith(".csv")
+    ]
+    if not csv_files:
+        raise FileNotFoundError(f"ERROR: Directory '{path}' contains no CSV files.")
 
 
 def is_header_row(row):
@@ -89,30 +104,26 @@ def validate_flight_row(fields):
     """
     Validate one CSV data row.
 
-    fields: list of strings (already split from CSV)
+    fields: list of strings
 
     Returns:
         (is_valid, record_dict_or_None, list_of_error_messages)
     """
     errors = []
 
-    # 1. Check that we have exactly 6 columns
     if len(fields) != 6:
         errors.append("missing required fields")
         return False, None, errors
 
-    # Strip whitespace from each field
-    flight_id, origin, destination, dep_str, arr_str, price_str = [
-        f.strip() for f in fields
-    ]
+    flight_id, origin, destination, dep_str, arr_str, price_str = [f.strip() for f in fields]
 
-    # 2. Validate flight_id: 2–8 alphanumeric characters
+    # flight_id rules
     if len(flight_id) < 2 or not flight_id.isalnum():
         errors.append("invalid flight_id")
     if len(flight_id) > 8:
         errors.append("flight_id too long (more than 8 characters)")
 
-    # 3. Validate origin and destination: 3 uppercase letters
+    # origin
     if not origin:
         errors.append("missing origin field")
     elif len(origin) != 3 or not origin.isupper() or not origin.isalpha():
@@ -120,6 +131,7 @@ def validate_flight_row(fields):
     elif origin in DISALLOWED_AIRPORT_CODES:
         errors.append("invalid origin code")
 
+    # destination
     if not destination:
         errors.append("missing destination field")
     elif len(destination) != 3 or not destination.isupper() or not destination.isalpha():
@@ -127,7 +139,7 @@ def validate_flight_row(fields):
     elif destination in DISALLOWED_AIRPORT_CODES:
         errors.append("invalid destination code")
 
-    # 4. Validate departure and arrival datetimes
+    # datetime validation
     dep_dt = None
     arr_dt = None
     dep_ok = True
@@ -151,12 +163,10 @@ def validate_flight_row(fields):
         if not arr_ok:
             errors.append("invalid arrival datetime")
 
-    # 5. arrival_datetime must be after departure_datetime
-    if dep_dt and arr_dt:
-        if arr_dt <= dep_dt:
-            errors.append("arrival before departure")
+    if dep_dt and arr_dt and arr_dt <= dep_dt:
+        errors.append("arrival before departure")
 
-    # 6. price must be a positive float
+    # price validation
     try:
         price_val = float(price_str)
         if price_val <= 0:
@@ -165,28 +175,22 @@ def validate_flight_row(fields):
         errors.append("invalid price value")
         price_val = 0.0
 
+    # if errors → invalid record
     if errors:
         return False, None, errors
 
-    record = {
+    return True, {
         "flight_id": flight_id,
         "origin": origin,
         "destination": destination,
         "departure_datetime": dep_str,
         "arrival_datetime": arr_str,
         "price": price_val,
-    }
-    return True, record, []
+    }, []
 
 
 def parse_csv_file(path, single_file=True):
-    """
-    Parse a single CSV file and separate valid and invalid lines.
-
-    Returns:
-        valid_records (list of dicts)
-        error_lines (list of human-readable error strings)
-    """
+    """Parse a single CSV file and report valid + invalid lines."""
     valid_records = []
     error_lines = []
     seen_header = False
@@ -195,113 +199,92 @@ def parse_csv_file(path, single_file=True):
         for line_no, line in enumerate(f, start=1):
             raw_line = line.rstrip("\n")
 
-            # Ignore completely blank lines
             if raw_line.strip() == "":
                 continue
 
             stripped = raw_line.lstrip()
 
-            # Comment lines: record in errors.txt, but skip as data
             if stripped.startswith("#"):
                 msg = "comment line, ignored for data parsing"
-                if single_file:
-                    prefix = f"Line {line_no}: "
-                else:
-                    prefix = f"{os.path.basename(path)} Line {line_no}: "
+                prefix = f"{'Line' if single_file else os.path.basename(path)+' Line'} {line_no}: "
                 error_lines.append(f"{prefix}{raw_line} → {msg}")
                 continue
 
-            # Use csv.reader for splitting
             reader = csv.reader([raw_line])
             try:
                 row = next(reader)
-            except Exception:
-                if single_file:
-                    prefix = f"Line {line_no}: "
-                else:
-                    prefix = f"{os.path.basename(path)} Line {line_no}: "
-                error_lines.append(
-                    f"{prefix}{raw_line} → could not parse CSV line"
-                )
+            except:
+                prefix = f"{'Line' if single_file else os.path.basename(path)+' Line'} {line_no}: "
+                error_lines.append(f"{prefix}{raw_line} → could not parse CSV line")
                 continue
 
-            # Skip header row
             if not seen_header and is_header_row(row):
                 seen_header = True
                 continue
 
-            # Validate the row
-            is_valid, record, row_errors = validate_flight_row(row)
-            if is_valid and record is not None:
+            is_valid, record, errs = validate_flight_row(row)
+            if is_valid:
                 valid_records.append(record)
             else:
-                if single_file:
-                    prefix = f"Line {line_no}: "
-                else:
-                    prefix = f"{os.path.basename(path)} Line {line_no}: "
-                error_lines.append(
-                    f"{prefix}{raw_line} → {', '.join(row_errors)}"
-                )
+                prefix = f"{'Line' if single_file else os.path.basename(path)+' Line'} {line_no}: "
+                error_lines.append(f"{prefix}{raw_line} → {', '.join(errs)}")
 
     return valid_records, error_lines
 
 
-def parse_directory(dir_path):
-    """
-    Parse all .csv files in a directory (non-recursive) and combine results.
-    """
+def parse_directory(path):
+    """Parse all CSV files in a directory with robust error handling."""
+    ensure_directory_exists(path)
+
     all_valid = []
     all_errors = []
 
-    csv_files = [
-        os.path.join(dir_path, name)
-        for name in os.listdir(dir_path)
-        if name.lower().endswith(".csv")
-    ]
-
-    for csv_path in sorted(csv_files):
-        valid, errors = parse_csv_file(csv_path, single_file=False)
-        all_valid.extend(valid)
-        all_errors.extend(errors)
+    for filename in sorted(os.listdir(path)):
+        if filename.lower().endswith(".csv"):
+            file_path = os.path.join(path, filename)
+            print(f"Processing file: {filename}")
+            valid, errors = parse_csv_file(file_path, single_file=False)
+            all_valid.extend(valid)
+            all_errors.extend(errors)
 
     return all_valid, all_errors
 
 
-def save_json(records, path):
-    """Save valid flight records to a JSON file."""
+def save_json(records, path="db.json"):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(records, f, indent=2)
 
 
 def save_errors(errors, path="errors.txt"):
-    """Save invalid lines and their error messages to a text file."""
     with open(path, "w", encoding="utf-8") as f:
-        for line in errors:
-            f.write(line + "\n")
+        for e in errors:
+            f.write(e + "\n")
 
 
 def main():
     args = parse_args()
 
-    # Decide where to read from: a single file or a directory
-    if args.input:
-        valid_flights, error_lines = parse_csv_file(args.input, single_file=True)
-        source_desc = args.input
-    else:
-        valid_flights, error_lines = parse_directory(args.directory)
-        source_desc = f"all .csv files in {args.directory}"
+    try:
+        if args.input:
+            ensure_file_exists(args.input)
+            valid, errors = parse_csv_file(args.input, single_file=True)
+            source_desc = args.input
+        else:
+            ensure_directory_exists(args.directory)
+            valid, errors = parse_directory(args.directory)
+            source_desc = f"all CSVs in {args.directory}"
+    except Exception as e:
+        print(e)
+        return
 
-    # Decide output JSON path
     output_json = args.output or "db.json"
+    save_json(valid, output_json)
+    save_errors(errors)
 
-    # Save results
-    save_json(valid_flights, output_json)
-    save_errors(error_lines, "errors.txt")
-
-    # Summary to the user
+    print("\nSUMMARY")
     print(f"Parsed source: {source_desc}")
-    print(f"Valid flights:   {len(valid_flights)} (saved to {output_json})")
-    print(f"Invalid/comment: {len(error_lines)} lines (saved to errors.txt)")
+    print(f"Valid flights:   {len(valid)} (saved to {output_json})")
+    print(f"Invalid/comment: {len(errors)} lines (saved to errors.txt)")
 
 
 if __name__ == "__main__":
